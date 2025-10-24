@@ -1,5 +1,6 @@
 import fetch from "node-fetch";
 import crypto from "crypto";
+import NodeCache from "node-cache";
 
 /**
  * Custom error class for Pesapal API errors
@@ -26,6 +27,8 @@ class PesapalConfig {
    * @param {Object} [options.logger=console] - Logger instance
    * @param {number} [options.retryAttempts=3] - Number of retry attempts for failed requests
    * @param {number} [options.retryDelay=1000] - Delay between retries in milliseconds
+   * @param {boolean} [options.encryptTokens=false] - Whether to encrypt tokens in memory
+   * @param {boolean} [options.useCache=true] - Whether to use caching for tokens
    */
   constructor(options) {
     this.consumerKey = options.consumerKey;
@@ -35,6 +38,8 @@ class PesapalConfig {
     this.logger = options.logger || console;
     this.retryAttempts = options.retryAttempts || 3;
     this.retryDelay = options.retryDelay || 1000;
+    this.encryptTokens = options.encryptTokens || false;
+    this.useCache = options.useCache !== false; // Default to true
     
     if (!this.consumerKey || !this.consumerSecret || !this.callbackBaseUrl) {
       throw new Error("Missing required configuration parameters");
@@ -100,16 +105,23 @@ class HttpClient {
     
     for (let attempt = 1; attempt <= this.config.retryAttempts; attempt++) {
       try {
-        this.logger.debug(`Attempt ${attempt}: ${options.method || 'GET'} ${url}`);
+        this.logger.debug(`[${options.method || 'GET'}] ${url} | payload: ${JSON.stringify(options.body)}`);
         
         const response = await fetch(url, options);
         
         if (!response.ok) {
           const errorText = await response.text();
+          let parsed;
+          try { 
+            parsed = JSON.parse(errorText); 
+          } catch { 
+            parsed = errorText; 
+          }
+          
           throw new PesapalError(
-            `Request failed: ${errorText}`,
+            `Request failed: ${parsed.message || parsed}`,
             response.status,
-            response
+            parsed
           );
         }
         
@@ -154,15 +166,64 @@ class PesapalAPI {
    * @param {boolean} [options.debug=false] - Enable debug logging
    * @param {number} [options.retryAttempts=3] - Number of retry attempts for failed requests
    * @param {number} [options.retryDelay=1000] - Delay between retries in milliseconds
+   * @param {boolean} [options.encryptTokens=false] - Whether to encrypt tokens in memory
+   * @param {boolean} [options.useCache=true] - Whether to use caching for tokens
    */
   constructor(options) {
     this.config = new PesapalConfig(options);
     this.logger = new Logger(this.config.logger, options.debug || false);
     this.httpClient = new HttpClient(this.config, this.logger);
+    
+    // Token management
     this.token = null;
     this.tokenExpiry = null;
+    this.tokenLock = null;
+    
+    // Cache for tokens and IPN IDs
+    this.cache = this.config.useCache ? new NodeCache({ stdTTL: 3300 }) : null; // 55 mins
     
     this.logger.log(`PesapalAPI initialized in ${this.config.env.toUpperCase()} mode`);
+  }
+
+  /**
+   * Encrypt a token using AES-256-CBC
+   * @param {string} token - Token to encrypt
+   * @returns {string} Encrypted token
+   */
+  encryptToken(token) {
+    if (!this.config.encryptTokens) return token;
+    
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv("aes-256-cbc", 
+      Buffer.from(this.config.consumerSecret).slice(0, 32), iv);
+    
+    let encrypted = cipher.update(token, "utf8", "hex");
+    encrypted += cipher.final("hex");
+    
+    return iv.toString("hex") + ":" + encrypted;
+  }
+
+  /**
+   * Decrypt a token using AES-256-CBC
+   * @param {string} encryptedToken - Encrypted token
+   * @returns {string} Decrypted token
+   */
+  decryptToken(encryptedToken) {
+    if (!this.config.encryptTokens) return encryptedToken;
+    
+    const parts = encryptedToken.split(":");
+    if (parts.length !== 2) throw new Error("Invalid encrypted token format");
+    
+    const iv = Buffer.from(parts[0], "hex");
+    const encrypted = parts[1];
+    
+    const decipher = crypto.createDecipheriv("aes-256-cbc", 
+      Buffer.from(this.config.consumerSecret).slice(0, 32), iv);
+    
+    let decrypted = decipher.update(encrypted, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+    
+    return decrypted;
   }
 
   /**
@@ -182,22 +243,49 @@ class PesapalAPI {
       body: JSON.stringify(payload),
     });
 
-    this.token = data.token;
+    this.token = this.encryptToken(data.token);
     this.tokenExpiry = Date.now() + 55 * 60 * 1000; // refresh 5 mins early
+    
+    if (this.cache) {
+      this.cache.set("pesapal_token", this.token);
+    }
+    
     this.logger.log("✅ Token retrieved successfully");
 
-    return data.token;
+    return this.decryptToken(this.token);
   }
 
   /**
-   * 🔄 Step 2: Ensure Token Validity
+   * 🔄 Step 2: Ensure Token Validity with race condition protection
    * @returns {Promise<string>} Valid OAuth token
    */
   async ensureToken() {
-    if (!this.token || Date.now() > this.tokenExpiry) {
-      await this.requestToken();
+    // Check cache first
+    if (this.cache) {
+      const cached = this.cache.get("pesapal_token");
+      if (cached) {
+        this.token = cached;
+        return this.decryptToken(this.token);
+      }
     }
-    return this.token;
+    
+    // Check if token is still valid
+    if (this.token && Date.now() < this.tokenExpiry) {
+      return this.decryptToken(this.token);
+    }
+
+    // If another request is refreshing the token, wait for it
+    if (this.tokenLock) {
+      await this.tokenLock;
+      return this.decryptToken(this.token);
+    }
+
+    // Otherwise, refresh the token
+    this.tokenLock = this.requestToken();
+    await this.tokenLock;
+    this.tokenLock = null;
+
+    return this.decryptToken(this.token);
   }
 
   /**
@@ -227,6 +315,11 @@ class PesapalAPI {
       },
       body: JSON.stringify(payload),
     });
+
+    // Cache the IPN ID if caching is enabled
+    if (this.cache) {
+      this.cache.set(`ipn_${notificationUrl}`, data.ipn_id);
+    }
 
     this.logger.log("✅ IPN registered:", data);
     return data;
@@ -317,7 +410,7 @@ class PesapalAPI {
   }
 
   /**
-   * 🛡️ Step 6: Verify IPN Signature (authenticity check)
+   * 🛡️ Step 6: Verify IPN Signature with timing-safe comparison
    * @param {Object} req - Request object
    * @param {Object} req.headers - Request headers
    * @param {Object} req.body - Request body
@@ -338,12 +431,26 @@ class PesapalAPI {
       .update(rawBody)
       .digest("hex");
 
-    const valid = computedSignature === signatureHeader;
-    if (!valid) {
-      this.logger.warn("❌ Invalid IPN signature detected");
-    }
+    // Use timing-safe comparison to prevent timing attacks
+    try {
+      const computedBuffer = Buffer.from(computedSignature, "hex");
+      const headerBuffer = Buffer.from(signatureHeader, "hex");
 
-    return valid;
+      if (computedBuffer.length !== headerBuffer.length) {
+        this.logger.warn("❌ Invalid IPN signature detected (length mismatch)");
+        return false;
+      }
+
+      const valid = crypto.timingSafeEqual(computedBuffer, headerBuffer);
+      if (!valid) {
+        this.logger.warn("❌ Invalid IPN signature detected");
+      }
+
+      return valid;
+    } catch (error) {
+      this.logger.error("Error verifying IPN signature:", error);
+      return false;
+    }
   }
 
   /**
@@ -362,6 +469,26 @@ class PesapalAPI {
         res.status(400).json({ error: "Malformed IPN request" });
       }
     };
+  }
+
+  /**
+   * 🔄 Utility: Handle IPN and verify order status
+   * @param {Object} req - Request object
+   * @returns {Promise<Object>} Transaction status or message
+   */
+  async handleIPN(req) {
+    if (!this.verifyIPNSignature(req)) {
+      throw new PesapalError("Invalid IPN signature", 401);
+    }
+
+    const { OrderTrackingId } = req.body;
+    if (OrderTrackingId) {
+      const status = await this.getTransactionStatus(OrderTrackingId);
+      this.logger.log("Updated order status:", status);
+      return status;
+    }
+    
+    return { message: "No tracking ID found" };
   }
 }
 

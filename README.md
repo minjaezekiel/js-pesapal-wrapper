@@ -4,22 +4,79 @@ A javascript wrapper for pesapal
 
 Your friendly assistant for handling Pesapal payments in your Node.js applications. Think of it as a translator that makes talking to the Pesapal payment system super easy!
 
-## 🌟 Why Use This Wrapper?
 
-- **Simple & Clean:** We handle the complicated parts so you can write clean, readable code.
-- **Safe & Secure:** Automatically checks that payment notifications are really from Pesapal.
-- **Smart:** It remembers your login token and automatically refreshes it.
-- **Helpful:** Gives you clear error messages when something goes wrong.
+[![npm version](https://badge.fury.io/js/pesapal-api-wrapper.svg)](https://badge.fury.io/js/pesapal-api-wrapper)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## 🌟 Key Features
+
+- **🛡️ Timing-Safe Security:** Uses `crypto.timingSafeEqual()` to prevent timing attacks on IPN signatures.
+- **🔄 Smart Token Management:** Automatically handles OAuth tokens with race-condition protection to prevent redundant refreshes.
+- **🚀 Built-in Caching:** Optional in-memory caching reduces API calls and improves performance for frequent requests.
+- **🔐 Enhanced Security:** Optional AES-256-CBC token encryption for sensitive, multi-tenant environments.
+- **🧠 Intelligent Error Handling:** Parses API errors for clearer, more actionable debugging information.
+- **✅ All-in-One IPN Handling:** Includes a `handleIPN` utility to automatically verify and process payment notifications.
+- **📝 Excellent Logging:** Detailed, contextual logging to make debugging a breeze.
+- **⚡ Simple & Clean:** A clean, modern API that's easy to understand and integrate.
 
 ## 📦 Installation
 
-First, you need to add the required package for making web requests:
+Install the required packages for making web requests, caching, and managing environment variables:
 
 ```bash
-npm install node-fetch
+npm install node-fetch node-cache dotenv
 ```
 
-Then, just copy the `pesapalAPI.js` file into your project.
+Then, copy the `PesapalAPI.js` file into your project.
+
+---
+
+## 🔑 Getting Your Pesapal Credentials (The Secure Way)
+
+Hardcoding your secret keys directly in your code is a big security risk! We'll use a `.env` file to keep them safe and separate from your codebase.
+
+### Step 1: Get Your Keys from Pesapal
+
+1.  Log in to your [Pesapal Dashboard](https://www.pesapal.com/).
+2.  Navigate to the **Developers** or **API** section.
+3.  You will find your **Consumer Key** and **Consumer Secret**. Copy these values.
+
+### Step 2: Set Up Your Project with `.env`
+
+1.  In the root of your project, create a file named `.env`. **This file should never be committed to Git.**
+2.  Create another file named `.env.example`. This one *can* be committed to show others what variables are needed.
+
+**`.env.example` file:**
+```env
+# Pesapal API Credentials
+PESAPAL_CONSUMER_KEY=your_consumer_key_here
+PESAPAL_CONSUMER_SECRET=your_consumer_secret_here
+
+# Your Application's Details
+CALLBACK_BASE_URL=https://your-website.com
+ENVIRONMENT=sandbox
+```
+
+**`.env` file (your actual secrets):**
+```env
+# Pesapal API Credentials
+PESAPAL_CONSUMER_KEY=MY_REAL_KEY_12345
+PESAPAL_CONSUMER_SECRET=MY_REAL_SECRET_67890
+
+# Your Application's Details
+CALLBACK_BASE_URL=https://my-awesome-app.com
+ENVIRONMENT=sandbox
+```
+
+3.  **Important:** Add `.env` to your `.gitignore` file to prevent accidentally uploading your secrets to GitHub.
+
+**`.gitignore` file:**
+```
+node_modules
+.env
+```
+
+---
 
 ## 🚀 Quick Start (The 3-Minute Guide)
 
@@ -27,18 +84,22 @@ Let's get you set up to accept your first payment in just a few steps!
 
 ### Step 1: Create Your Pesapal Assistant
 
-Create a new file, let's call it `my-shop.js`, and set up your assistant.
+Create a new file, let's call it `my-shop.js`, and set up your assistant using the `.env` variables.
 
 ```javascript
-import PesapalAPI from './pesapalAPI.js';
+// Load environment variables from .env file
+import 'dotenv/config'; 
+import PesapalAPI from './PesapalAPI.js';
 
 // Create your very own Pesapal assistant!
 const pesapal = new PesapalAPI({
-  consumerKey: "YOUR_PESAPAL_CONSUMER_KEY",      // Get this from your Pesapal dashboard
-  consumerSecret: "YOUR_PESAPAL_CONSUMER_SECRET", // Also from your dashboard
-  callbackBaseUrl: "https://my-awesome-website.com", // Your website's address
-  env: "sandbox",                                // Use "sandbox" for testing!
-  debug: true                                    // Shows you what's happening behind the scenes
+  consumerKey: process.env.PESAPAL_CONSUMER_KEY,
+  consumerSecret: process.env.PESAPAL_CONSUMER_SECRET,
+  callbackBaseUrl: process.env.CALLBACK_BASE_URL,
+  env: process.env.ENVIRONMENT || "sandbox", // Use "sandbox" for testing!
+  debug: true,                                // Shows you what's happening behind the scenes
+  encryptTokens: true,                        // Encrypt tokens in memory (optional, for high security)
+  useCache: true                              // Use caching for better performance
 });
 ```
 
@@ -50,7 +111,7 @@ Now, let's create a payment request for a cool t-shirt that costs 1000 KES.
 async function createPayment() {
   try {
     // First, tell Pesapal where to send payment updates
-    const ipn = await pesapal.registerIPN("https://my-awesome-website.com/payment-updates");
+    const ipn = await pesapal.registerIPN(`${process.env.CALLBACK_BASE_URL}/ipn`);
     console.log("✅ Notification address registered! ID:", ipn.ipn_id);
 
     // Now, create the order
@@ -83,121 +144,154 @@ Run this file with `node my-shop.js`, and you'll get a link in your console. Cli
 
 ---
 
-## 📖 Detailed Guide
+## 📖 Complete Implementation Example (Express.js Server)
 
-Here's a closer look at what you can do with your Pesapal assistant.
+Here is a full, production-ready example of an Express server that uses the wrapper to create payments and securely handle IPN notifications.
 
-### 🔑 1. Configuration Options
-
-When you create your `PesapalAPI` assistant, you can give it these options:
-
-| Option | What it is | Example |
-|---|---|---|
-| `consumerKey` | Your secret username from Pesapal | `"MY_CONSUMER_KEY"` |
-| `consumerSecret` | Your secret password from Pesapal | `"MY_CONSUMER_SECRET"` |
-| `callbackBaseUrl` | Your website's main address | `"https://my-app.com"` |
-| `env` | Where you're working: `"sandbox"` (for practice) or `"production"` (for real money) | `"sandbox"` |
-| `debug` | Set to `true` to see helpful messages in the console | `true` |
-| `retryAttempts` | How many times to try again if a request fails (default is 3) | `3` |
-
-### 🧾 2. Register an IPN (Instant Payment Notification)
-
-An IPN is like a special phone line that Pesapal calls to tell you a payment is complete. You need to register this "phone number" (a URL) first.
-
+**`server.js`**
 ```javascript
-// Tell Pesapal where to send updates
-const ipnInfo = await pesapal.registerIPN(
-  "https://my-awesome-website.com/pesapal-updates", // The URL Pesapal will call
-  "My Main IPN"                                     // A friendly name for it
-);
-
-console.log("Your IPN ID is:", ipnInfo.ipn_id); // Save this ID!
-```
-
-### 💳 3. Submit an Order
-
-This is how you ask a customer for money.
-
-```javascript
-const orderInfo = await pesapal.submitOrder({
-  notificationId: ipnInfo.ipn_id,       // The ID you got from registering the IPN
-  amount: 2500,                         // The amount to charge
-  currency: "KES",                      // The currency code
-  description: "Super Awesome Book",    // What the customer is buying
-  billingInfo: {                        // Customer's details
-    email_address: "john.doe@email.com",
-    phone_number: "+254798765432",
-    first_name: "John",
-    last_name: "Doe",
-    country: "Kenya"
-  }
-});
-
-// After this, you must redirect the user to `orderInfo.redirect_url`
-// so they can enter their payment details.
-```
-
-### 🔍 4. Get Transaction Status
-
-Sometimes, you just want to ask Pesapal: "Hey, did that payment go through yet?"
-
-```javascript
-const status = await pesapal.getTransactionStatus("ORDER_TRACKING_ID_HERE");
-
-if (status.status_code === "1") {
-  console.log("✅ Payment was successful!");
-} else {
-  console.log("❌ Payment is not complete yet or failed.");
-}
-```
-
-### 🛡️ 5. Receiving Secure IPNs (The Magic Part)
-
-Instead of you always checking for payments, Pesapal can *tell you* when a payment is done. This is the best way! We'll use an Express.js server as an example.
-
-The `ipnMiddleware()` is like a security guard. It checks every message to make sure it's really from Pesapal before letting it through.
-
-```javascript
+// 1. IMPORTS AND CONFIGURATION
+import 'dotenv/config'; // Load .env variables FIRST
 import express from 'express';
+import PesapalAPI from './PesapalAPI.js';
+
+// 2. INITIALIZE PESAPAL API
+const pesapal = new PesapalAPI({
+  consumerKey: process.env.PESAPAL_CONSUMER_KEY,
+  consumerSecret: process.env.PESAPAL_CONSUMER_SECRET,
+  callbackBaseUrl: process.env.CALLBACK_BASE_URL,
+  env: process.env.ENVIRONMENT || "sandbox",
+  debug: true,
+  encryptTokens: true,
+  useCache: true
+});
+
+// 3. INITIALIZE EXPRESS APP
 const app = express();
-app.use(express.json()); // Needed to read incoming data
+app.use(express.json()); // Middleware to parse JSON bodies
 
-// This is your special IPN endpoint
-app.post('/pesapal-updates',
-  pesapal.ipnMiddleware(), // The security guard checks the signature
-  (req, res) => {
-    // If we get here, the message is from Pesapal! Yay!
-    console.log("🔔 Received a payment update:", req.body);
+// 4. DEFINE ROUTES
 
-    // Here's where you do your magic:
-    // - Update your database
-    // - Mark an order as "paid"
-    // - Send a confirmation email to the customer
-    // - Give the user access to what they bought
+/**
+ * @route   POST /create-payment
+ * @desc    Creates a new payment order with Pesapal
+ */
+app.post('/create-payment', async (req, res) => {
+  try {
+    const { amount, description, billingInfo } = req.body;
 
-    if (req.body.status === 'completed') {
-      console.log(`Payment for order ${req.body.order_tracking_id} is complete!`);
+    // Register our IPN URL once (or you can do this elsewhere and store the ID)
+    const ipn = await pesapal.registerIPN(`${process.env.CALLBACK_BASE_URL}/ipn`);
+    
+    // Submit the order to Pesapal
+    const order = await pesapal.submitOrder({
+      notificationId: ipn.ipn_id,
+      amount,
+      currency: "KES",
+      description,
+      billingInfo
+    });
+
+    res.json({
+      success: true,
+      redirect_url: order.redirect_url,
+      order_tracking_id: order.order_tracking_id
+    });
+
+  } catch (error) {
+    console.error("Payment creation failed:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * @route   POST /ipn
+ * @desc    Receives and verifies Instant Payment Notifications from Pesapal
+ */
+app.post('/ipn', 
+  // This middleware automatically verifies the signature for security!
+  pesapal.ipnMiddleware(), 
+  async (req, res) => {
+    try {
+      // The handleIPN utility verifies the signature and fetches the latest status
+      const status = await pesapal.handleIPN(req);
+
+      console.log(`🔔 IPN Received for Order: ${status.order_tracking_id}`);
+      console.log(`Status: ${status.status_message} | Method: ${status.payment_method}`);
+
+      // --- YOUR BUSINESS LOGIC GOES HERE ---
+      // 1. Find the order in your database using status.order_tracking_id
+      // 2. If status.status_code === "1", update the order to "Paid"
+      // 3. Send a confirmation email to the customer
+      // 4. Grant the user access to their product
+      // -------------------------------------
+
+      // Always respond to Pesapal with a 200 OK to acknowledge receipt
+      res.status(200).send("OK");
+
+    } catch (error) {
+      console.error("IPN Handling failed:", error);
+      // If there's an error, Pesapal might retry, so we still send 200
+      // but log the error for debugging.
+      res.status(200).send("Error processing, but received.");
     }
-
-    // Always tell Pesapal you received the message
-    res.status(200).send("OK");
   }
 );
 
-app.listen(3000, () => {
-  console.log("🚀 Server is running on http://localhost:3000");
+// 5. START THE SERVER
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server is running on http://localhost:${PORT}`);
+  console.log(`📡 IPN endpoint ready at: ${process.env.CALLBACK_BASE_URL}/ipn`);
 });
 ```
 
-## 🤔 Oops! Troubleshooting
+---
 
-| Problem | What it Means | How to Fix It |
-|---|---|---|
-| `Token request failed` | Your `consumerKey` or `consumerSecret` is wrong. | Double-check them for typos. Make sure you copied them correctly from your Pesapal dashboard. |
-| `IPN registration failed` | The URL you gave Pesapal is not working. | Make sure your website is online and the URL is correct. Pesapal needs to be able to reach it. |
-| `SubmitOrder failed` | Some information for the order is missing or wrong. | Make sure you included `notificationId`, `amount`, `description`, and `billingInfo`. Check that the amount is a number. |
-| `Invalid IPN signature` | Someone tried to send a fake payment update. | Don't worry! Our security guard caught it. This error is just a log message to let you know the wrapper is protecting you. |
+## 📚 API Reference
+
+| Method | Description |
+|---|---|
+| `constructor(options)` | Initializes the API wrapper. See configuration options above. |
+| `async registerIPN(url, name)` | Registers an IPN URL with Pesapal to receive payment notifications. |
+| `async submitOrder(details)` | Submits a new payment order. Returns a redirect URL for the customer. |
+| `async getTransactionStatus(orderTrackingId)` | Fetches the current status of a transaction. |
+| `verifyIPNSignature(req)` | Verifies if an incoming IPN request is genuinely from Pesapal. |
+| `ipnMiddleware()` | Returns an Express middleware that uses `verifyIPNSignature` for protection. |
+| `async handleIPN(req)` | A utility that verifies an IPN and immediately fetches the transaction status. |
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions from the community! Whether it's a bug fix, a new feature, or improved documentation, your help is appreciated.
+
+1.  **Fork the Repository:** Click the "Fork" button at the top right of this page.
+2.  **Clone Your Fork:**
+    ```bash
+    git clone https://github.com/YOUR_USERNAME/pesapal-wrapper.git
+    ```
+3.  **Create a New Branch:** For your feature or bug fix.
+    ```bash
+    git checkout -b feature/amazing-new-feature
+    ```
+4.  **Make Your Changes:** Code, test, and ensure everything works as expected.
+5.  **Commit Your Changes:**
+    ```bash
+    git commit -m "feat: add my amazing new feature"
+    ```
+6.  **Push to Your Branch:**
+    ```bash
+    git push origin feature/amazing-new-feature
+    ```
+7.  **Open a Pull Request:** Go to your fork on GitHub and click the "New Pull Request" button. Provide a clear description of your changes.
+
+For major changes, please open an issue first to discuss what you would like to change.
 
 ## 📄 License
 
-MIT License - feel free to use this in your own projects!
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgements
+
+A big thank you to **Pesapal** for providing a powerful payment platform that enables businesses across Africa.
