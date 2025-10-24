@@ -1,0 +1,37 @@
+{
+  "name": "js-pesapal-wrapper",
+  "version": "1.0.0",
+  "description": "A javascript pesapal wrapper to enable effecient, secure and seemless transactions in your software/apps...",
+  "keywords": [
+    "pesapal",
+    "\"payment",
+    "solution\"",
+    "pay",
+    "\"payment",
+    "gateway",
+    "wrapper\"",
+    "\"payment",
+    "gateway\"",
+    "payment",
+    "webpay",
+    "wrapper"
+  ],
+  "homepage": "https://github.com/minjaezekiel/js-pesapal-wrapper#readme",
+  "bugs": {
+    "url": "https://github.com/minjaezekiel/js-pesapal-wrapper/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/minjaezekiel/js-pesapal-wrapper.git"
+  },
+  "license": "MIT",
+  "author": "Ezekiel Minja",
+  "type": "commonjs",
+  "main": "pesapalAPI.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}
