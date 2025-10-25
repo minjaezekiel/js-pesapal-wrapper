@@ -1,5 +1,5 @@
 import fetch from "node-fetch";
-import crypto from "crypto";
+import crypto from "crypto"
 import NodeCache from "node-cache";
 
 /**
@@ -48,7 +48,9 @@ class PesapalConfig {
 
   /**
    * Get the base URL for the API based on environment
-   * @returns {string} Base URL
+   *https://cybqa.pesapal.com/pesapalv3/api/Auth/RequestToken
+   * 
+   *  @returns {string} Base URL
    */
   getBaseUrl() {
     return this.env === "sandbox"
@@ -61,29 +63,30 @@ class PesapalConfig {
  * Logger utility for consistent logging
  */
 class Logger {
-  constructor(logger = console, debug = false) {
-    this.logger = logger;
-    this.debug = debug;
+  constructor(baseLogger = console, debugEnabled = false) {
+    // Normalize logger methods so they're always functions
+    this.baseLogger = {
+      log: (...args) => baseLogger.log ? baseLogger.log(...args) : console.log(...args),
+      info: (...args) => baseLogger.info ? baseLogger.info(...args) : console.log(...args),
+      warn: (...args) => baseLogger.warn ? baseLogger.warn(...args) : console.warn(...args),
+      error: (...args) => baseLogger.error ? baseLogger.error(...args) : console.error(...args),
+      debug: (...args) => {
+        if (debugEnabled) {
+          (baseLogger.debug ? baseLogger.debug(...args) : console.log('[DEBUG]', ...args));
+        }
+      },
+    };
+
+    this.debugEnabled = debugEnabled;
   }
 
-  log(...args) {
-    this.logger.log(...args);
-  }
-
-  error(...args) {
-    this.logger.error(...args);
-  }
-
-  warn(...args) {
-    this.logger.warn(...args);
-  }
-
-  debug(...args) {
-    if (this.debug) {
-      this.logger.debug(...args);
-    }
-  }
+  log(...args) { this.baseLogger.log(...args); }
+  info(...args) { this.baseLogger.info(...args); }
+  warn(...args) { this.baseLogger.warn(...args); }
+  error(...args) { this.baseLogger.error(...args); }
+  debug(...args) { this.baseLogger.debug(...args); }
 }
+
 
 /**
  * HTTP client for making API requests with retry logic
@@ -191,17 +194,17 @@ class PesapalAPI {
    * @returns {string} Encrypted token
    */
   encryptToken(token) {
-    if (!this.config.encryptTokens) return token;
-    
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv("aes-256-cbc", 
-      Buffer.from(this.config.consumerSecret).slice(0, 32), iv);
-    
-    let encrypted = cipher.update(token, "utf8", "hex");
-    encrypted += cipher.final("hex");
-    
-    return iv.toString("hex") + ":" + encrypted;
-  }
+  if (!this.config.encryptTokens) return token;
+
+  const iv = crypto.randomBytes(16);
+  const key = crypto.createHash("sha256").update(this.config.consumerSecret).digest();
+
+  const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
+  let encrypted = cipher.update(token, "utf8", "hex");
+  encrypted += cipher.final("hex");
+
+  return iv.toString("hex") + ":" + encrypted;
+}
 
   /**
    * Decrypt a token using AES-256-CBC
@@ -209,22 +212,21 @@ class PesapalAPI {
    * @returns {string} Decrypted token
    */
   decryptToken(encryptedToken) {
-    if (!this.config.encryptTokens) return encryptedToken;
-    
-    const parts = encryptedToken.split(":");
-    if (parts.length !== 2) throw new Error("Invalid encrypted token format");
-    
-    const iv = Buffer.from(parts[0], "hex");
-    const encrypted = parts[1];
-    
-    const decipher = crypto.createDecipheriv("aes-256-cbc", 
-      Buffer.from(this.config.consumerSecret).slice(0, 32), iv);
-    
-    let decrypted = decipher.update(encrypted, "hex", "utf8");
-    decrypted += decipher.final("utf8");
-    
-    return decrypted;
-  }
+  if (!this.config.encryptTokens) return encryptedToken;
+
+  const parts = encryptedToken.split(":");
+  if (parts.length !== 2) throw new Error("Invalid encrypted token format");
+
+  const iv = Buffer.from(parts[0], "hex");
+  const encrypted = parts[1];
+  const key = crypto.createHash("sha256").update(this.config.consumerSecret).digest();
+
+  const decipher = crypto.createDecipheriv("aes-256-cbc", key, iv);
+  let decrypted = decipher.update(encrypted, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+
+  return decrypted;
+}
 
   /**
    * 🔑 Step 1: Get OAuth token 
